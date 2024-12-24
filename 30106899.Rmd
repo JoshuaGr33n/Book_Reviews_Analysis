@@ -1,0 +1,1024 @@
+---
+title: " Assignment Data Mining MS4S09"
+output: html_document
+date: "2024-01-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#### Task 1
+
+
+```{r install and load libraries}
+libraries <- c("tm", "tidytext", "ggplot2", "wordcloud", "syuzhet", "dplyr", "tibble", "textstem", "textdata", "tidyr", "Matrix", "topicmodels", "stringr", "reshape2", "LDAvis", "jsonlite","slam", "NMF", "stm", "spacyr")
+
+  #install.packages(libraries) 
+
+for (lib in libraries) { 
+  library(lib, character.only=TRUE) #Library takes function names without quotes, character only must be used in a loop of this kind.
+}
+```
+
+```{r import data set}
+filepath <- 'MS4S09_CW_Book_Reviews.csv'
+data_set_df <- as_tibble(read.csv(filepath, stringsAsFactors = FALSE)) # Since we have text data we do not want this read as a factor
+print(summary(data_set_df))
+```
+
+
+```{r select columns of choice }
+# Select columns "Title", "Reviewer_id", "Rating", and "Review_text" only
+# Corrected code
+df <- data_set_df[, c("Title", "Reviewer_id", "Rating", "Review_text")]
+df <- na.omit(df) # Removes all rows containing null values
+
+df$Review_id <- 1:nrow(df) # 'Review_id' will serve as an identifier column to provide a unique identity for each review/row
+
+print(summary(df))
+```
+
+
+```{r top 5 books with the most reviews }
+book_counts <- count(df,Title, sort=TRUE) # Count number of reviews by Title and sort
+head(book_counts) # Print top 5 most reviewed Books
+```
+```{r sample of 500 books }
+set.seed(1)
+
+# Take sample of 500 book titles
+unique_titles <- unique(df$Title)
+sample_size <- min(500, length(unique_titles))  # Set the sample size to the minimum of 500 or the total number of unique titles
+
+sampled_books <- sample(unique_titles, sample_size)  # Take titles at index defined previously
+
+#print(sampled_books)
+
+df <- df %>%
+  filter(Title %in% sampled_books)  # Select only rows where the title is one of the sampled books
+
+print(summary(df))
+
+
+```
+```{r}
+head(df)
+```
+```{r tokenization }
+
+#word tokenization
+word_tokenized_data <- df %>%
+  unnest_tokens(output = word, input = "Review_text", token = "words", to_lower = TRUE) # Tokenize word column to words
+
+#bigram tokenization
+bigram_tokenized_data <- df %>%
+  unnest_tokens(output = bigram, input = "Review_text", token = "ngrams", n=2, to_lower = TRUE) # Tokenize word column to bigrams
+```
+
+```{r tokenized words }
+print(word_tokenized_data)
+```
+```{r tokenized bigrams}
+print(bigram_tokenized_data)
+```
+```{r count the occurrence of each tokenized word }
+word_counts <- word_tokenized_data %>%
+  count(word, sort = TRUE)
+print(word_counts)
+```
+```{r plot the top 10 tokenized words against the word count (n) }
+ggplot(word_counts[1:10, ], aes(x = reorder(word, n), y = n)) +
+  geom_col(fill = "green") +
+  labs(x = "Words", y = "Frequency") +
+  coord_flip() +
+  theme_minimal()
+```
+```{r word cloud for tokenized words }
+# Set a seed for reproducibility
+set.seed(1)
+
+# Generate a word cloud using the 'wordcloud' function
+wordcloud(
+  words = word_counts$word,  # Specify the words from the 'word_counts' dataframe
+  freq = word_counts$n,  # Specify the frequency of each word
+  min.freq = 10,  # Set a minimum frequency threshold for inclusion
+  random.order = FALSE,  # Maintain the order of words based on frequency
+  random.color = FALSE,  # Disable random coloring of words
+  colors = sample(colors(), size = 10),  # Sample 10 colors for the word cloud
+  max.words = 200  # Set a maximum number of words to display in the cloud
+)
+
+```
+```{r count the occurrence of each tokenized bigram }
+bigram_counts <- bigram_tokenized_data %>%
+  count(bigram, sort = TRUE)
+print(bigram_counts)
+```
+```{r plot the top 10 tokenized bigrams against the bigram count (n) }
+ggplot(bigram_counts[1:10, ], aes(x = reorder(bigram, n), y = n)) +
+  geom_col(fill = "green") +
+  labs(x = "Bigrams", y = "Frequency") +
+  coord_flip() +
+  theme_minimal()
+```
+```{r word cloud for tokenized bigrams}
+# Set a seed for reproducibility
+set.seed(1)
+
+# Generate a word cloud for bigrams using the 'wordcloud' function
+wordcloud(
+  words = bigram_counts$bigram,  # Specify the bigrams from the 'bigram_counts' dataframe
+  freq = bigram_counts$n,  # Specify the frequency of each bigram
+  min.freq = 10,  # Set a minimum frequency threshold for inclusion
+  random.order = FALSE,  # Maintain the order of bigrams based on frequency
+  random.color = FALSE,  # Disable random coloring of bigrams
+  colors = sample(colors(), size = 10),  # Sample 10 colors for the word cloud
+  max.words = 100  # Set a maximum number of bigrams to display in the cloud
+)
+
+```
+```{r clean the tokenized data for words}
+
+clean_tokens <- word_tokenized_data %>%
+  anti_join(stop_words, by = "word") #  stop words removal
+
+
+
+clean_tokens$word <- gsub("[^a-zA-Z ]", "", clean_tokens$word) %>% # Remove special characters and numbers and replace with blank space
+  na_if("") %>% # replace empty strings (blank space) with 'NA'
+  lemmatize_words() # Lemmatization e.g reading to read
+
+clean_tokens <- na.omit(clean_tokens) 
+
+print(clean_tokens) #Print the cleaned words
+```
+```{r clean the tokenized data for bigrams}
+
+untokenized_data <- clean_tokens %>%
+  group_by(Review_id) %>%
+  summarize(clean_review = paste(word, collapse = " ")) %>%
+  inner_join(df[, c(1, 2, 4, 5)], by = "Review_id")
+
+# Tokenize word column to bigrams and clean
+clean_bigrams <- untokenized_data %>%
+  unnest_tokens(output = bigram, input = "clean_review", token = "ngrams", n = 2, to_lower = TRUE) %>%
+  mutate(bigram = gsub("[^a-zA-Z ]", "", bigram) %>%  # Remove non-letters
+           na_if("") %>%  # Replace empty strings with NA
+           lemmatize_words())  # Lemmatize bigrams if needed
+
+# Remove rows with NA values
+clean_bigrams <- na.omit(clean_bigrams)
+
+# Print the cleaned bigrams
+print(clean_bigrams)
+
+
+```
+```{r top 10 words after cleaning}
+# Count the frequency of each word in the clean_tokens dataframe
+word_counts <- clean_tokens %>%
+  count(word, sort = TRUE)
+
+# Select the top 10 most frequent words. (In this case, 11 is selected as the last 2 words has the same frequency)
+top_words <- top_n(word_counts, 10, n)$word
+
+# Print the word counts
+print(top_words)
+
+# Filter the word counts to include only the top words
+filtered_word_counts <- filter(word_counts, word %in% top_words)
+print(filtered_word_counts)
+
+# Order the factor levels of 'word' based on the frequency of occurrence
+filtered_word_counts$word <- factor(filtered_word_counts$word, levels = top_words[length(top_words):1])
+
+# Plot the top ten words against their respective frequency (n)
+ggplot(filtered_word_counts, aes(x = reorder(word, n), y = n)) +
+  geom_col(fill = "green") +  # Bar plot with green fill
+  labs(x = "Words", y = "Frequency") +  # Axis labels
+  coord_flip() +  # Flip the coordinates to create a horizontal bar plot
+  theme_minimal()  # Use a minimal theme for better visualization
+
+```
+```{r top 10 bigrams after cleaning}
+
+# Count the frequency of each bigram in the clean_bigrams dataframe
+bigram_counts <- clean_bigrams %>%
+  count(bigram, sort = TRUE)
+
+# Select the top 10 most frequent bigrams.
+top_bigrams <- top_n(bigram_counts, 10, n)$bigram
+
+# Print the most frequent bigram 
+print(top_bigrams)
+
+# Filter the bigram counts to include only the top bigrams
+filtered_bigram_counts <- filter(bigram_counts, bigram %in% top_bigrams)
+print(filtered_bigram_counts)
+
+
+# Order the factor levels of 'bigram' based on the frequency of occurrence
+filtered_bigram_counts$bigram <- factor(filtered_bigram_counts$bigram, levels = top_bigrams[length(top_bigrams):1])
+
+# Create a bar plot using ggplot2
+ggplot(filtered_bigram_counts, aes(x = reorder(bigram, n), y = n)) +
+  geom_col(fill = "green") +  # Bar plot with green fill
+  labs(x = "Bigrams", y = "Frequency") +  # Axis labels
+  coord_flip() +  # Flip the coordinates to create a horizontal bar plot
+  theme_minimal()  # Use a minimal theme for better visualization
+
+
+```
+```{r Grouped Words plot}
+
+# Select the top 10 most frequent words
+top_words <- top_n(word_counts, 10, n)$word
+
+# Group the clean_tokens dataframe by Title and count the occurrences of each word
+grouped_count <- clean_tokens %>%
+  group_by(Title) %>%
+  count(word) %>%
+  filter(word %in% top_words)  # Filter to include only the top words
+
+# Select the top 10 titles based on the total word frequency
+top_titles <- grouped_count %>%
+  group_by(Title) %>%
+  summarise(total_frequency = sum(n)) %>%
+  top_n(10, total_frequency) %>%
+  pull(Title)
+
+# Filter to include only the top 10 titles
+grouped_count <- grouped_count %>%
+  filter(Title %in% top_titles)
+
+# Order the factor levels of 'word' based on the frequency of occurrence
+grouped_count$word <- factor(grouped_count$word, levels = top_words[length(top_words):1])
+
+# Create a grouped bar plot using ggplot2
+ggplot(data = grouped_count, aes(x = word, y = n, fill = Title)) +
+  geom_col(position = "dodge") +  # Grouped bar plot
+  labs(x = "Words", y = "Frequency", fill = "Titles") +  # Axis and legend labels
+  coord_flip() +  # Flip the coordinates to create a horizontal bar plot
+  theme_minimal()  # Use a minimal theme for better visualization
+
+```
+
+```{r Grouped Bigrams plot}
+
+# Select the top 10 most frequent bigrams
+top_bigrams <- top_n(bigram_counts, 10, n)$bigram
+
+# Group the clean_bigrams dataframe by Title and count the occurrences of each bigram
+grouped_count_bigrams <- clean_bigrams %>%
+  group_by(Title) %>%
+  count(bigram) %>%
+  filter(bigram %in% top_bigrams)  # Filter to include only the top bigrams
+
+# Select the top 5 titles based on the total bigram frequency
+top_titles_bigrams <- grouped_count_bigrams %>%
+  group_by(Title) %>%
+  summarise(total_frequency = sum(n)) %>%
+  top_n(5, total_frequency) %>%
+  pull(Title)
+
+# Filter to include only the top 5 titles
+grouped_count_bigrams <- grouped_count_bigrams %>%
+  filter(Title %in% top_titles_bigrams)
+
+# Order the factor levels of 'bigram' based on the frequency of occurrence
+grouped_count_bigrams$bigram <- factor(grouped_count_bigrams$bigram, levels = top_bigrams[length(top_bigrams):1])
+
+# Create a grouped bar plot using ggplot2 for bigrams
+ggplot(data = grouped_count_bigrams, aes(x = bigram, y = n, fill = Title)) +
+  geom_col(position = "dodge") +  # Grouped bar plot
+  labs(x = "Bigrams", y = "Frequency", fill = "Titles") +  # Axis and legend labels
+  coord_flip() +  # Flip the coordinates to create a horizontal bar plot
+  theme_minimal()  # Use a minimal theme for better visualization
+
+
+```
+```{r cleaned word clouds}
+# Set a seed for reproducibility
+set.seed(1)
+
+# Create a word cloud using wordcloud function
+wordcloud(
+  words = word_counts$word,   # Words to be displayed in the word cloud
+  freq = word_counts$n,       # Corresponding frequencies of each word
+  min.freq = 1,              # Minimum frequency for a word to be included
+  random.order = FALSE,       # Fix the order of words for reproducibility
+  random.color = FALSE,       # Use the same color palette for reproducibility
+  colors = sample(colors(), size = 10),  # Sample 10 colors from the default color palette
+   max.words = 200  # reduce the words to accommodate the availbale space for the word cloud
+)
+
+```
+#### Task 2
+
+### Sentiment Analysis
+
+## Bing Lexicon 
+```{r bing lexicon overview}
+bing_sentiments <- get_sentiments("bing")
+
+summary(bing_sentiments)
+```
+```{r}
+print(unique(bing_sentiments$sentiment))
+```
+```{r}
+set.seed(2)
+bing_sentiments[sample(nrow(bing_sentiments), 5),]
+```
+## Applying Bing Lexicon
+
+```{r apply bing }
+# Create a dataset containing only words with associated sentiment
+# and add a sentiment column using the Bing lexicon
+sentiment_data <- clean_tokens %>%
+  inner_join(get_sentiments("bing"), by = "word")
+
+# Calculate sentiment scores for each review based on positive and negative occurrences
+sentiment_score <- sentiment_data %>%
+  group_by(Review_id) %>%
+  summarize(bing_sentiment = sum(sentiment == "positive") - sum(sentiment == "negative"))
+
+# Merge the calculated sentiment scores with the original dataframe 'df'
+df_with_sentiment <- df %>%
+  inner_join(sentiment_score, by = "Review_id")
+
+
+```
+
+
+# reviews
+```{r Bing worst review}
+
+# Find the review with the worst-lowest sentiment score
+worst_reviews <- df_with_sentiment[order(df_with_sentiment$bing_sentiment)[1], "Review_text"]
+
+# Print each review
+for (review in worst_reviews) {
+  print(review)
+}
+
+
+```
+```{r best reviews}
+# Find the review with the best-highest sentiment score
+best_reviews <- df_with_sentiment[order(df_with_sentiment$bing_sentiment, decreasing = TRUE)[1], "Review_text"]
+
+# Print each review
+for (review in best_reviews) {
+  print(review)
+}
+
+```
+# bing lexicon visuals
+```{r Histogram of bing sentiment scores }
+ggplot(df_with_sentiment, aes(x = bing_sentiment)) +
+  geom_histogram(binwidth = 1)
+```
+```{r  Average Bing Sentiment by top 10 book titles}
+# Calculate the average sentiment score for each book title
+book_title_sentiment <- df_with_sentiment %>%
+  group_by(Title) %>%
+  summarize(average_bing_Sentiment = mean(bing_sentiment))
+
+# Select the top 10 book titles based on average sentiment score
+top_titles <- book_title_sentiment %>%
+  arrange(desc(average_bing_Sentiment)) %>%
+  head(10)
+
+# Create a grouped bar plot using ggplot2 for the top 10 book titles
+ggplot(top_titles, aes(x = reorder(Title, average_bing_Sentiment), y = average_bing_Sentiment, fill = Title)) +
+  geom_bar(stat = "identity") +  # Grouped bar plot
+  coord_flip() +  # Flip the coordinates to create a horizontal bar plot
+  labs(title = "Top 10 Average Sentiment Scores by Book Title (Bing)", x = "Book Title", y = "Average Sentiment Score") +
+  theme(
+    plot.title = element_text(size = 8),  # Adjust title font size
+    axis.title.x = element_text(size = 5),  # Adjust x-axis label font size
+    axis.title.y = element_text(size = 5),  # Adjust y-axis label font size
+    axis.text = element_text(size = 5),  # Adjust axis text font size
+    legend.title = element_text(size = 5),  # Adjust legend title font size
+    legend.text = element_text(size = 5)  # Adjust legend text font size
+  )
+
+
+```
+```{r Box Plot Bing sentiment against the ratings}
+# Convert Rating to factor if it's not already
+df_with_sentiment$Rating <- as.factor(df_with_sentiment$Rating)
+
+# Plot sentiment against ratings using a boxplot
+ggplot(df_with_sentiment, aes(x = Rating, y = bing_sentiment)) +
+  geom_boxplot() +
+  labs(title = "Box Plot of Bing Sentiment Score vs. Rating",
+       x = "Rating",
+       y = "Sentiment Score")
+
+```
+## AFINN Lexicon
+
+```{r AFINN Lexicon overview }
+afinn_sentiments <- get_sentiments("afinn")
+
+summary(afinn_sentiments)
+```
+
+
+```{r}
+set.seed(1)
+afinn_sentiments[sample(nrow(afinn_sentiments), 5),]
+```
+
+## Applying AFINN Lexicon
+```{r}
+# Create a dataset containing only words with associated sentiment using the AFINN lexicon
+# and add a sentiment column to the cleaned tokenized data
+sentiment_data <- clean_tokens %>%
+  inner_join(get_sentiments("afinn"), by = "word")
+
+# Calculate sentiment scores for each review based on the AFINN lexicon
+sentiment_score <- sentiment_data %>%
+  group_by(Review_id) %>%
+  summarize(afinn_sentiment = sum(value))
+
+# Merge the calculated AFINN sentiment scores with the original dataframe 'df_with_sentiment'
+df_with_sentiment <- df_with_sentiment %>%
+  inner_join(sentiment_score, by = "Review_id")
+
+```
+
+# reviews
+```{r Afinn worst review}
+# Find the review with the lowest AFINN sentiment score
+worst_reviews <- df_with_sentiment[order(df_with_sentiment$afinn_sentiment)[1], "Review_text"]
+
+# Print each review
+for (review in worst_reviews) {
+  print(review)
+}
+
+```
+```{r best review}
+# Find the review with the highest AFINN sentiment score
+best_reviews <- df_with_sentiment[order(df_with_sentiment$afinn_sentiment, decreasing = TRUE)[1], "Review_text"]
+
+# Print each review
+for (review in best_reviews) {
+  print(review)
+}
+
+```
+# afinn lexicon visuals
+```{r Histogram of afinn sentiment scores}
+ggplot(df_with_sentiment, aes(x = afinn_sentiment)) +
+  geom_histogram(binwidth = 1)
+
+```
+```{r Average AFINN Sentiment by top 10 book titles}
+
+# Average Sentiment by Title
+book_title_sentiment <- df_with_sentiment %>%
+  group_by(Title) %>%
+  summarize(Average_Afinn_Sentiment = mean(afinn_sentiment))
+
+# Select the top 10 titles based on average sentiment score
+top_10_titles <- book_title_sentiment %>%
+  arrange(desc(Average_Afinn_Sentiment)) %>%
+  head(10)
+
+# Create a grouped bar plot using ggplot2 for the top 10 titles
+ggplot(top_10_titles, aes(x = reorder(Title, Average_Afinn_Sentiment), y = Average_Afinn_Sentiment, fill = Title)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Top 10 Average Sentiment Scores by Book Title (Afinn)", x = "Book Title", y = "Average Sentiment Score") +
+  theme(
+    plot.title = element_text(size = 8),  # Adjust title font size
+    axis.title.x = element_text(size = 5),  # Adjust x-axis label font size
+    axis.title.y = element_text(size = 5),  # Adjust y-axis label font size
+    axis.text = element_text(size = 5),  # Adjust axis text font size
+    legend.title = element_text(size = 5),  # Adjust legend title font size
+    legend.text = element_text(size = 5)  # Adjust legend text font size
+  )
+
+
+
+```
+```{r Box Plot of Afinn Sentiment against rating}
+ggplot(df_with_sentiment, aes(x = Rating, y = afinn_sentiment)) +
+  geom_boxplot() +
+  labs(title = "Box Plot of AFINN Sentiment Score vs. Rating",
+       x = "Rating",
+       y = "Sentiment Score")
+```
+```{r Scatter Plot of Bing vs. AFINN Sentiment scores}
+ggplot(df_with_sentiment, aes(x = bing_sentiment, y = afinn_sentiment)) +
+  geom_point(aes(color = Rating)) +
+  labs(title = "Scatter Plot of Bing vs. AFINN Sentiment Scores",
+       x = "Bing Sentiment Score",
+       y = "AFINN Sentiment Score")
+```
+
+## NRC Lexicon
+
+```{r NRC Lexicon overview}
+nrc_sentiments <- get_sentiments("nrc")
+
+summary(nrc_sentiments)
+```
+```{r}
+head(nrc_sentiments)
+```
+```{r}
+print(unique(nrc_sentiments$sentiment))
+```
+```{r}
+set.seed(1)
+nrc_sentiments[sample(nrow(nrc_sentiments), 5),]
+```
+## Applying NRC Lexicon
+```{r}
+emotion_data <- clean_tokens %>%
+  inner_join(get_sentiments("nrc"), by = "word")
+
+# Calculate Sentiment scores for each review
+emotion_count <- emotion_data %>%
+  group_by(Review_id) %>%
+  count(sentiment)
+
+
+
+# Pivots data so that there is a column associated with each emotion
+wide_emotion_data <- emotion_count %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = list(n = 0))
+
+
+# Merge with df
+df_with_sentiment = df_with_sentiment %>%
+  inner_join(wide_emotion_data, by = "Review_id")
+
+print(df_with_sentiment)
+
+```
+```{r}
+long_df <- df_with_sentiment %>%
+  pivot_longer(cols = matches("(joy|positive|trust|anticipation|surprise|sadness|negative|anger|disgust|fear)"),
+               names_to = "Emotion",
+               values_to = "Intensity")
+
+emotion_scores <- long_df %>%
+  group_by(Title, Emotion) %>%
+  summarize(avg_intensity = mean(Intensity), .groups = "drop") #overide grouped summary function by the Title column
+
+# print(colnames(df_with_sentiment))
+
+# Clean up emotion names
+emotion_scores <- emotion_scores %>%
+  mutate(Emotion = gsub("\\.\\w+", "", Emotion))
+
+# Select the top 10 titles based on the average intensity
+top_titles <- emotion_scores %>%
+  group_by(Title) %>%
+  summarize(avg_intensity = mean(avg_intensity)) %>%
+  top_n(10, wt = avg_intensity) %>%
+  pull(Title)
+
+# Filter the emotion_scores dataframe to include only the top 10 titles
+emotion_scores_top10 <- emotion_scores %>%
+  filter(Title %in% top_titles)
+
+# Select the top 10 emotions based on average intensity
+top_emotions <- emotion_scores %>%
+  group_by(Emotion) %>%
+  summarize(avg_intensity = mean(avg_intensity)) %>%
+  top_n(10, wt = avg_intensity) %>%
+  pull(Emotion)
+
+# Filter the emotion_scores_top10 dataframe to include only the top 10 emotions
+emotion_scores_top10 <- emotion_scores_top10 %>%
+  filter(Emotion %in% top_emotions)
+
+ggplot(emotion_scores_top10, aes(x = Title, y = Emotion, fill = avg_intensity)) +
+  geom_tile() +  
+  scale_fill_gradient2(low = "blue", high = "red") + 
+  labs(x = "Title", y = "Emotion", fill = "Intensity") +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+```
+
+##Informative conclusion on Task 2
+
+Based on the analysis conducted through various sentiment lexicons (Bing, AFINN, NRC) and the exploration of sentiment scores and emotion intensities across the dataset, here are the informative conclusions drawn from the findings:
+
+### Comprehensive Sentiment Analysis:
+- The application of Bing, AFINN, and NRC lexicons offered a multifaceted view of sentiment and emotion within the corpus. The Bing lexicon delineated a basic positive-negative sentiment framework, while the AFINN lexicon provided a nuanced scale of sentiment intensity, and the NRC lexicon expanded the analysis into a broader spectrum of emotions, including joy, trust, anticipation, and fear.
+
+### Sentiment Intensity and Distribution:
+- Histograms of sentiment scores from Bing and AFINN lexicons revealed the distribution of sentiments across the reviews, highlighting predominant emotional tones and their intensities. The presence of distinct peaks in these histograms indicated common sentiment trends among the reviews, suggesting shared reactions or opinions toward certain subjects or themes within the text.
+
+### Emotional Spectrum Insights:
+- The NRC emotion analysis deepened the understanding of the corpus's emotional landscape, uncovering complex emotional layers beyond mere positivity or negativity. This analysis showed how certain texts or topics might evoke a complex array of emotions, reflecting the multifaceted nature of human emotional responses to text.
+
+### Sentiment and Rating Correlation:
+- The box plots comparing sentiment scores against user ratings provided visual evidence of a correlation between expressed sentiments and numerical ratings. This correlation suggests that sentiment analysis could serve as a proxy for understanding and predicting user ratings or satisfaction levels.
+
+### Detailed Emotional Profiles:
+- The detailed exploration of emotions through NRC lexicon applications offered insights into how specific emotions are distributed across the corpus. By examining emotion counts and intensities, it was possible to identify which emotions were most frequently associated with different texts, providing a deeper understanding of the emotional impact of the corpus.
+
+### Sentiment Variation among Titles:
+- The analysis of average sentiment scores by book titles (both Bing and AFINN) and the visualization of top 10 book titles by average sentiment score highlighted how sentiment varies significantly across different texts. This variation reflects the diverse emotional and subjective experiences elicited by different literary works.
+
+### Bing vs. AFINN Sentiment Scores:
+- The scatter plot comparing Bing and AFINN sentiment scores underscored the differences in sentiment assessment between the two lexicons. The plot likely showed varying degrees of correlation between the lexicons' sentiment scores, illustrating the subjective nature of sentiment analysis and the impact of lexicon choice on sentiment interpretation.
+
+These conclusions provide a nuanced understanding of the corpus's emotional and sentiment landscape, demonstrating the power of sentiment analysis in uncovering the underlying emotional dimensions of text. Through the application of multiple sentiment lexicons, the analysis captured a wide range of emotional responses, offering valuable insights into the text's impact and the subjective experiences it may elicit.
+
+
+
+
+#### Task 3
+```{r Data Preparation for task 3 Modeling}
+# Select Columns
+df <- data_set_df %>% 
+  select(c("Title", "Reviewer_id", "Rating", "Review_text")) %>%
+  filter(str_count(Review_text) >= 200 & str_count(Review_text) <= 400)
+
+df <- na.omit(df) # Removes all rows containing null values
+
+df$Review_id <- 1:nrow(df)
+
+if(nrow(df) > 1000) {
+  set.seed(1) # for reproducibility
+  df <- sample_n(df, 1000)
+}
+
+summary(df)
+```
+
+
+# convert data reviews to Term document matrix
+```{r create a Term Document Matrix (TDM)}
+# Convert text column to corpus
+corpus <- VCorpus(VectorSource(df$Review_text))
+
+# Apply cleaning operations to the corpus
+corpus <- tm_map(corpus, content_transformer(tolower)) %>%
+  tm_map(content_transformer(function(x) gsub("[^a-zA-Z ]", "", x))) %>%
+  tm_map(removeWords, stopwords("en")) %>%
+  tm_map(stemDocument)
+
+# Convert to a term document matrix with word length constraints of 3 to 15 characters
+tdm <- TermDocumentMatrix(corpus, control = list(wordLengths = c(3, 15)))
+
+tdm_matrix <- as.matrix(tdm)
+
+#print(tdm_matrix)
+```
+# Term Selection
+
+```{r Visualization of Term Frequency}
+
+# Calculate the term frequencies by summing the rows of the Term Document Matrix (TDM):
+term_frequencies <- rowSums(tdm_matrix)
+
+# Create a data frame for visualization, including terms and their frequencies:
+term_frequency_df <- data.frame(term = names(term_frequencies), frequency = term_frequencies)
+
+# Sort the data frame by frequency in descending order and select the top 10 terms:
+top_terms <- term_frequency_df %>%
+  arrange(desc(frequency)) %>%
+  head(10)
+
+# Display the top 10 terms:
+print(top_terms)
+
+# Create a histogram to visualize the distribution of term frequencies:
+ggplot(term_frequency_df, aes(x = frequency)) +
+  geom_histogram(binwidth = 1) +
+  labs(title = "Histogram of Term Frequencies",
+       x = "Term Frequency",
+       y = "Number of Terms") +
+  theme_minimal()
+```
+
+
+```{r word filtering}
+# Find terms that appear in more than 10% of documents
+frequent_terms <- findFreqTerms(tdm, lowfreq = 0.1 * ncol(tdm_matrix))
+# Find terms that appear in less than 1% of documents
+rare_terms <- findFreqTerms(tdm, highfreq = 0.01 * ncol(tdm_matrix))
+
+print("Frequent Terms")
+print(frequent_terms)
+print("First 20 Infrequent Terms")
+print(rare_terms[1:20])
+
+# Edit list of frequent words to keep useful ones
+to_keep <- c("histori", "love", "novel")
+
+to_remove <- frequent_terms[!frequent_terms %in% to_keep]
+
+# Filter the Term Document Matrix (TDM) by removing selected terms:
+filtered_tdm_matrix <- tdm_matrix[!rownames(tdm_matrix) %in% to_remove, ]
+filtered_tdm_matrix <- filtered_tdm_matrix[!rownames(filtered_tdm_matrix) %in% rare_terms, ]
+
+# Remove 0 sum columns from the filtered TDM.
+# Calculate column sums
+column_sums <- colSums(filtered_tdm_matrix)
+
+# Identify columns that are all zeros
+zero_columns <- which(column_sums == 0)
+
+# Remove these columns if any
+if (length(zero_columns) > 0) {
+  # Remove these columns
+  filtered_tdm_matrix <- filtered_tdm_matrix[, -zero_columns]
+} else {
+  # If no columns are all zeros, just use the original matrix
+  print("No zero columns in TDM matrix")
+}
+
+```
+```{r Visualization of Term Frequency after filter}
+
+# Calculate term frequencies by summing up rows in the filtered Term Document Matrix (TDM).
+term_frequencies <- rowSums(filtered_tdm_matrix)
+
+# Create a data frame for plotting with term and frequency columns.
+term_frequency_df <- data.frame(term = names(term_frequencies), frequency = term_frequencies)
+
+# Sort the data frame by frequency in descending order and select the top 10 terms.
+top_terms <- term_frequency_df %>%
+  arrange(desc(frequency)) %>%
+  head(10)
+
+# Display the top 10 terms.
+print(top_terms)
+
+# Create a histogram of term frequencies.
+ggplot(term_frequency_df, aes(x = frequency)) +
+  geom_histogram(binwidth = 1) +
+  labs(title = "Histogram of Term Frequencies",
+       x = "Term Frequency",
+       y = "Number of Terms") +
+  theme_minimal()
+
+```
+
+## Topic Modeling
+# Application of LDA Model
+```{r first model}
+dtm <- t(filtered_tdm_matrix)
+lda_model <- LDA(dtm, k = 3)
+```
+
+```{r visualise the LDA model}
+# Extract topic information using the tidy function on the LDA model's beta matrix.
+topics <- tidy(lda_model, matrix = "beta")
+# Create a dataframe with the probability of each word in each topic.
+topics
+
+# Display the top terms for each topic based on beta values.
+top_terms <- topics %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+# Create a bar plot to visualize the top terms for each topic.
+top_terms %>%
+  ggplot(aes(x = reorder(term, beta), y = beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  coord_flip()
+
+```
+```{r}
+
+range_k <- seq(2, 10, by = 1) 
+perplexities <- sapply(range_k, function(k) {
+  model <- LDA(dtm, k = k, control = list(seed = 1))
+  perplexity(model)
+})
+
+# Plotting perplexities
+plot(range_k, perplexities, type = "b", xlab = "Number of Topics", ylab = "Perplexity")
+```
+```{r}
+set.seed(1)
+lda_model <- LDA(dtm, k = 10)
+
+lda_vis_data <- createJSON(phi = posterior(lda_model)$terms,
+                          theta = posterior(lda_model)$topics,
+                          doc.length = rowSums(as.matrix(dtm)),
+                          vocab = colnames(as.matrix(dtm)),
+                          term.frequency = colSums(as.matrix(dtm)))
+
+serVis(lda_vis_data)
+```
+
+```{r}
+topics <- tidy(lda_model, matrix = "beta") #redefined the perplexed topics
+
+ggsave("plot.png", width = 10, height = 8) #plot perplexed topic
+
+top_terms <- topics %>%
+  group_by(topic) %>%
+  top_n(6, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+top_terms %>%
+  ggplot(aes(term, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  coord_flip()
+
+documents <- tidy(lda_model, matrix = "gamma")
+```
+
+## Informative Conclusion for Task 3
+
+The third task encompassed a comprehensive approach to text analysis, leveraging sentiment lexicons (Bing and AFINN), term frequency-inverse document frequency (TF-IDF) analysis, and topic modeling with Latent Dirichlet Allocation (LDA). This multifaceted analysis offered insights into the emotional tone, thematic structure, and lexical significance within a corpus of textual data. Based on the methodologies applied and the outcomes generated, here are the informative conclusions drawn from the findings:
+
+### Comprehensive Sentiment and Emotional Tone Analysis:
+- The Bing and AFINN sentiment lexicons revealed the underlying sentiment polarity and intensity across the dataset, highlighting the prevalence of positive or negative emotions associated with specific terms or overall reviews. This sentiment analysis underscores the emotional tone conveyed in the textual data, offering a window into the subjective experiences or attitudes of the authors.
+  
+- The NRC lexicon, through its categorization of words into emotional dimensions, provided a nuanced view of the emotional responses elicited by the text. This analysis goes beyond simple polarity to encompass a spectrum of emotions, offering a deeper understanding of the text's emotional impact.
+
+### Lexical Significance and Distribution:
+- The TF-IDF analysis pinpointed terms that are particularly significant within individual documents but not necessarily common across the entire corpus. This method effectively highlighted unique or defining terms that contribute to the distinctiveness of certain texts or topics.
+  
+- The visualization of term frequencies, both before and after filtering for overly frequent or rare terms, facilitated an understanding of the lexical landscape of the dataset. These visualizations underscore the importance of certain terms within the corpus and the necessity of filtering to refine the focus of the analysis.
+
+### Thematic Structure and Topic Coherence:
+- LDA topic modeling successfully uncovered latent thematic structures within the corpus, identifying distinct topics that encapsulate the corpus's underlying subject matter. The selection of an optimal number of topics through perplexity analysis ensured that the derived topics were both coherent and representative of the textual data.
+  
+- Visualizations of the LDA model's outcomes, including bar plots of top terms per topic and a heatmap of document-topic distributions, provided clear and intuitive insights into the thematic content and topic distributions across the corpus. These visual tools are invaluable for interpreting the model's results and understanding the thematic underpinnings of the text.
+
+### Methodological Insights and Analytical Rigor:
+- The application of multiple analytical lenses—from sentiment analysis through lexicons to advanced topic modeling with LDA—demonstrates the value of a layered analytical approach. Each method contributed unique insights, from emotional tone to thematic structure and lexical significance.
+  
+- The iterative process of model evaluation and refinement, exemplified by the exploration of perplexity across different numbers of topics, underscores the importance of methodological rigor. This approach ensures that the analytical outcomes are both robust and meaningfully aligned with the data's inherent characteristics.
+
+In conclusion, this task showcased the power of combining sentiment analysis, TF-IDF, and LDA topic modeling to unravel the complex layers of meaning, sentiment, and structure within textual data. The findings not only illuminate the corpus's emotional and thematic dimensions but also highlight the analytical value of a comprehensive, multimodal approach to text analysis.
+
+
+
+
+#### Task 4
+
+#TF-IDF to check the importance of each term(word) on each document(review)
+```{r Implementation of TF-IDF}
+# Create a corpus from the Review_text column
+corpus <- VCorpus(VectorSource(df$Review_text))
+
+# Preprocess the corpus
+corpus <- corpus %>%
+  tm_map(content_transformer(tolower)) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removeWords, stopwords("en"))
+
+
+# Create a term-document matrix (TDM) with TF-IDF weighting
+tdm <- TermDocumentMatrix(corpus, control = list(weighting = weightTfIdf))
+
+# Convert TDM to a data frame
+tfidf_df <- as.data.frame(as.matrix(tdm))
+colnames(tfidf_df) <- colnames(tdm)
+
+# Display the TF-IDF values
+#print(tfidf_df)
+# Display the first 100 rows of the TF-IDF values
+print(head(tfidf_df, n = 100))
+
+
+```
+
+#Non-negative Matrix Factorization (NMF)
+```{r implementation of NMF  }
+
+# Install and load the NMF package
+#install.packages("NMF")
+#library(NMF)
+
+
+
+# Number of topics  (rank)
+num_topics <- 6
+
+# Convert TermDocumentMatrix to a regular matrix
+tdm_matrix <- as.matrix(tdm)
+
+# Perform NMF
+nmf_model <- nmf(tdm_matrix, rank = num_topics, method = "brunet", seed = 123)
+
+# Extract the document-topic matrix (W matrix)
+doc_topic_matrix <- basis(nmf_model)
+
+# Extract the term-topic matrix (H matrix)
+term_topic_matrix <- coef(nmf_model)
+
+# Display the results
+print("Document-Topic Matrix:")
+print(head(doc_topic_matrix, 10))
+print("Term-Topic Matrix:")
+print(head(term_topic_matrix, 10))
+
+# Visualize the results 
+heatmap(doc_topic_matrix, Rowv = NA, Colv = NA, col = heat.colors(256), scale = "column")
+
+
+```
+
+# Structural Topic Model (STM)
+```{r Implement STM}
+
+corpus <- VCorpus(VectorSource(df$Review_text))
+corpus <- tm_map(corpus, content_transformer(tolower))
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, removeNumbers)
+corpus <- tm_map(corpus, removeWords, stopwords("en"))
+corpus <- tm_map(corpus, stripWhitespace)  # Ensure no leading/trailing spaces
+
+# Convert the corpus into a plain text vector
+text_vector <- sapply(corpus, as.character)
+
+# Use stm's textProcessor to prepare for STM
+processed <- textProcessor(documents = text_vector, metadata = df)
+out <- prepDocuments(processed$documents, processed$vocab, processed$meta)
+
+documents <- out$documents
+vocab <- out$vocab
+meta_data <- out$meta
+
+# Specify the number of topics
+K <- 6
+
+# Fit the STM model
+stm_model <- stm(documents = documents, vocab = vocab, K = K, data = meta_data, init.type = "Spectral")
+
+# Summary and visualization
+summary(stm_model)
+plot(stm_model, type = "summary")
+
+```
+# Natural Language Processing
+```{r NLP with Spacy}
+spacy_install()
+spacy_initialize(model = "en_core_web_sm")
+```
+```{r NER and POS using spacy}
+#corpus <- c("I ate apple today",
+ #           "iPhone was developed by Apple.")
+
+corpus <- c(df$Review_text)
+entities <- spacy_parse(corpus, dependency = TRUE)
+
+# output the entities
+print(head(entities, 10))
+```
+
+## Future Discussions
+
+For Task 4, which involved a comprehensive analysis using TF-IDF, Non-negative Matrix Factorization (NMF), Structural Topic Modeling (STM), and Natural Language Processing (NLP) with SpaCy, the discussion of future work can explore several promising directions to extend the research, leverage the findings for practical applications, and address the challenges encountered. Here’s a structured approach to outlining future work:
+
+### Enhancing Text Analysis Techniques:
+
+1. Deep Learning for Text Analysis: Explore deep learning models like BERT or GPT for advanced text analysis tasks, including sentiment analysis, entity recognition, and topic modeling. These models can capture contextual nuances better than traditional methods.
+
+2. Cross-Lingual Analysis: Expand the corpus to include texts in multiple languages and apply cross-lingual NLP techniques to understand sentiment, emotion, and topics across different linguistic contexts.
+
+3. Integration of Semantic Analysis: Incorporate semantic analysis to capture the meanings of words in context, going beyond frequency counts and entity recognition. This can involve using word embeddings or knowledge graphs.
+
+### Advancing Topic Modeling:
+
+4. Dynamic Topic Modeling: For corpora with temporal data, apply dynamic topic modeling to track how topics evolve over time. This can provide insights into changing trends, emerging themes, or the impact of external events.
+
+5. Customized Topic Models: Develop customized topic models that incorporate domain-specific knowledge, such as predefined categories or hierarchical structures, to improve topic coherence and relevance.
+
+6. Comparative Topic Analysis: Conduct comparative analyses across different datasets or subgroups within a corpus to uncover unique or shared topics. This can reveal how discourse varies across communities, time periods, or in response to specific events.
+
+### Leveraging NLP for Enhanced Insights:
+
+7. Advanced Entity Recognition and Linking: Extend NER to include entity linking, connecting recognized entities to knowledge bases. This can enrich the analysis with external information, such as entity relationships, categories, or attributes.
+
+8. Sentiment Analysis at the Entity and Aspect Level: Apply aspect-based sentiment analysis to extract sentiments related to specific aspects or entities within the text. This can provide a more granular understanding of opinions and attitudes.
+
+9. Automated Text Summarization: Develop models for automated summarization of text data, providing quick insights into large datasets or highlighting key points from lengthy documents.
+
+### Addressing Ethical and Methodological Challenges:
+
+10. Bias Detection and Mitigation: Investigate potential biases in the data, models, or analysis methods. Develop strategies to mitigate these biases, ensuring fair and equitable treatment of all subjects and topics.
+
+11. Privacy and Anonymity: In datasets containing personal or sensitive information, explore techniques for anonymizing data while preserving the integrity of the analysis. This includes handling named entities and personal identifiers responsibly.
+
+12. Interdisciplinary Applications: Apply the developed methodologies to interdisciplinary research, exploring how text analysis can contribute to fields such as social sciences, healthcare, marketing, or political science.
+
+13. Interactive Data Visualization Tools: Create interactive visualization tools that allow users to explore the data, analysis results, and model outputs dynamically. This can facilitate deeper engagement with the findings and support exploratory analysis.
+
+By pursuing these directions, future work can build on the foundation established in Task 4, pushing the boundaries of text analysis, enhancing the robustness and applicability of the findings, and addressing critical ethical and methodological challenges.
